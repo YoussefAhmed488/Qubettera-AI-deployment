@@ -33,6 +33,27 @@ def _parser() -> argparse.ArgumentParser:
         choices=("all", "hybrid", "adaptive"),
         default="all",
     )
+    supabase_init = rag_commands.add_parser(
+        "supabase-init", help="Save the Supabase connection URI for this project"
+    )
+    supabase_init.add_argument(
+        "--url",
+        required=True,
+        help="Session-pooler connection URI from the Supabase dashboard",
+    )
+    supabase_init.add_argument(
+        "--force", action="store_true", help="Overwrite an existing target file"
+    )
+    migrate = rag_commands.add_parser(
+        "migrate", help="Copy the local corpus to the configured Supabase target"
+    )
+    migrate_group = migrate.add_mutually_exclusive_group()
+    migrate_group.add_argument(
+        "--stage-only", action="store_true", help="Copy and index without publishing"
+    )
+    migrate_group.add_argument(
+        "--publish-only", action="store_true", help="Publish an already staged copy"
+    )
 
     agent = commands.add_parser("agent")
     agent_commands = agent.add_subparsers(dest="agent_command", required=True)
@@ -79,6 +100,22 @@ def _run_pipeline(skip_collection: bool) -> None:
     chunk()
     embed()
     store()
+
+
+def _supabase_init(args: argparse.Namespace) -> int:
+    from qubettera.rag.database import write_target_file
+
+    try:
+        path = write_target_file(args.url, overwrite=args.force)
+    except FileExistsError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Saved Supabase connection URI to {path}")
+    print("Active target is still 'local'; set QUBETTERA_DB=supabase to use it.")
+    return 0
 
 
 def _run_discussion(args: argparse.Namespace) -> int:
@@ -215,6 +252,17 @@ def main(argv: list[str] | None = None) -> int:
             allow_incomplete_corpus=not args.require_complete_corpus,
             mode=args.mode,
         )
+        return 0
+    if args.command == "rag" and args.rag_command == "supabase-init":
+        return _supabase_init(args)
+    if args.command == "rag" and args.rag_command == "migrate":
+        from qubettera.rag.migrate import run as migrate
+
+        try:
+            migrate(publish_only=args.publish_only, stage_only=args.stage_only)
+        except (RuntimeError, ValueError) as error:
+            print(str(error), file=sys.stderr)
+            return 2
         return 0
     if args.command == "agent" and args.agent_command == "opinion":
         from qubettera.agents.pipelines.opinion import generate_opinion

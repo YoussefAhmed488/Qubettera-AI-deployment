@@ -260,3 +260,6 @@ node_modules/
 !frontend/lib/**
 # Original imported handoff retained locally; integrated code is in frontend/backend.
 /Frontend-Deployment-Production/
+
+# Supabase connection URI written by `qubettera rag supabase-init`
+resources/supabase.target.json

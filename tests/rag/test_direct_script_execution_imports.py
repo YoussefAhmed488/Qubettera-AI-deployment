@@ -17,6 +17,7 @@ import pytest
         "retrieve",
         "evaluate",
         "store",
+        "migrate",
         "run_pipeline",
     ],
 )

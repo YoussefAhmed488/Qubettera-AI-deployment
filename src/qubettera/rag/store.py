@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import math
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -13,7 +15,9 @@ if __package__ in {None, ""}:
 from psycopg2 import sql
 from psycopg2.extras import execute_values
 
+from qubettera.rag.database import active_target as read_active_target
 from qubettera.rag.database import connect as connect_database
+from qubettera.rag.database import describe_target as describe_active_target
 from qubettera.rag.database import get_db_config as read_db_config
 from qubettera.rag.jsonl import iter_jsonl
 from qubettera.rag.settings import (
@@ -30,6 +34,38 @@ EMBEDDED_PATH = Path("data/chunks_with_embeddings.jsonl")
 STAGING_TABLE = "chunks_staging"
 PREVIOUS_TABLE = "chunks_previous"
 INSERT_BATCH_SIZE = 500
+
+# Canonical column order for every write path (JSONL insert and DB-to-DB COPY).
+# `text_search` is excluded because it is a generated column.
+CHUNK_COLUMNS = (
+    "chunk_id",
+    "text",
+    "embedding_text",
+    "url",
+    "title",
+    "headers",
+    "doc_index",
+    "chunk_index",
+    "char_len",
+    "content_hash",
+    "fetched_at",
+    "pipeline_version",
+    "preprocessing_version",
+    "embedding_model",
+    "embedding_model_revision",
+    "embedding",
+)
+
+
+class TableSet(NamedTuple):
+    """Live/staging/previous table names for one atomic publish."""
+
+    live: str = "chunks"
+    staging: str = STAGING_TABLE
+    previous: str = PREVIOUS_TABLE
+
+
+DEFAULT_TABLES = TableSet()
 
 
 def get_db_config() -> dict:
@@ -141,36 +177,48 @@ def get_connection():
     return connect_database(purpose="the pipeline")
 
 
-def _create_staging_schema(cur, dimension: int) -> None:
+def ivfflat_lists(expected_count: int) -> int:
+    """Choose the IVFFlat list count for a corpus of the given size."""
+    return max(1, min(IVFFLAT_MAX_LISTS, int(math.sqrt(expected_count))))
+
+
+def chunks_table_ddl(table_name: str, dimension: int) -> sql.Composed:
+    """Return the canonical ``chunks`` table DDL for any schema owner.
+
+    Shared by the local staging build and the Supabase migration so both produce
+    an identical table, including the generated ``text_search`` column.
+    """
+    return sql.SQL(
+        """
+        CREATE TABLE {} (
+            chunk_id                 TEXT PRIMARY KEY,
+            text                     TEXT NOT NULL,
+            embedding_text           TEXT NOT NULL,
+            url                      TEXT,
+            title                    TEXT,
+            headers                  JSONB,
+            doc_index                INTEGER,
+            chunk_index              INTEGER,
+            char_len                 INTEGER,
+            content_hash             TEXT NOT NULL,
+            fetched_at               TIMESTAMPTZ,
+            pipeline_version         TEXT NOT NULL,
+            preprocessing_version    TEXT NOT NULL,
+            embedding_model          TEXT NOT NULL,
+            embedding_model_revision TEXT NOT NULL,
+            embedding                VECTOR({}),
+            text_search              TSVECTOR GENERATED ALWAYS AS (
+                to_tsvector('english', coalesce(title, '') || ' ' || text)
+            ) STORED
+        )
+        """
+    ).format(sql.Identifier(table_name), sql.SQL(str(dimension)))
+
+
+def _create_staging_schema(cur, dimension: int, tables: TableSet = DEFAULT_TABLES) -> None:
     cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(STAGING_TABLE)))
-    cur.execute(
-        sql.SQL(
-            """
-            CREATE TABLE {} (
-                chunk_id                 TEXT PRIMARY KEY,
-                text                     TEXT NOT NULL,
-                embedding_text           TEXT NOT NULL,
-                url                      TEXT,
-                title                    TEXT,
-                headers                  JSONB,
-                doc_index                INTEGER,
-                chunk_index              INTEGER,
-                char_len                 INTEGER,
-                content_hash             TEXT NOT NULL,
-                fetched_at               TIMESTAMPTZ,
-                pipeline_version         TEXT NOT NULL,
-                preprocessing_version    TEXT NOT NULL,
-                embedding_model          TEXT NOT NULL,
-                embedding_model_revision TEXT NOT NULL,
-                embedding                VECTOR({}),
-                text_search              TSVECTOR GENERATED ALWAYS AS (
-                    to_tsvector('english', coalesce(title, '') || ' ' || text)
-                ) STORED
-            )
-            """
-        ).format(sql.Identifier(STAGING_TABLE), sql.SQL(str(dimension)))
-    )
+    cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(tables.staging)))
+    cur.execute(chunks_table_ddl(tables.staging, dimension))
 
 
 def _insert_batches(cur) -> int:
@@ -218,21 +266,23 @@ def _insert_batches(cur) -> int:
     return inserted
 
 
-def _build_and_validate_indexes(cur, expected_count: int) -> None:
-    lists = max(1, min(IVFFLAT_MAX_LISTS, int(math.sqrt(expected_count))))
+def _build_and_validate_indexes(
+    cur, expected_count: int, tables: TableSet = DEFAULT_TABLES
+) -> None:
+    lists = ivfflat_lists(expected_count)
     cur.execute(
         sql.SQL(
             "CREATE INDEX chunks_next_embedding_idx ON {} "
             "USING ivfflat (embedding vector_cosine_ops) WITH (lists = {})"
-        ).format(sql.Identifier(STAGING_TABLE), sql.SQL(str(lists)))
+        ).format(sql.Identifier(tables.staging), sql.SQL(str(lists)))
     )
     cur.execute(
         sql.SQL("CREATE INDEX chunks_next_text_search_idx ON {} USING gin (text_search)").format(
-            sql.Identifier(STAGING_TABLE)
+            sql.Identifier(tables.staging)
         )
     )
-    cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(STAGING_TABLE)))
-    cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(STAGING_TABLE)))
+    cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(tables.staging)))
+    cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(tables.staging)))
     stored_count = cur.fetchone()[0]
     if stored_count != expected_count:
         raise RuntimeError(
@@ -247,30 +297,30 @@ def _build_and_validate_indexes(cur, expected_count: int) -> None:
                    COUNT(DISTINCT pipeline_version)
             FROM {}
             """
-        ).format(sql.Identifier(STAGING_TABLE))
+        ).format(sql.Identifier(tables.staging))
     )
     if cur.fetchone() != (1, 1, 1, 1):
         raise RuntimeError("Staging table contains mixed embedding identities")
     print(f"Built IVFFlat index with lists={lists}; staging validation passed.")
 
 
-def _atomic_swap(cur) -> None:
-    cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(PREVIOUS_TABLE)))
-    cur.execute("SELECT to_regclass(current_schema() || '.chunks')")
+def _atomic_swap(cur, tables: TableSet = DEFAULT_TABLES) -> None:
+    cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(tables.previous)))
+    cur.execute("SELECT to_regclass(current_schema() || '.' || %s)", (tables.live,))
     has_live_table = cur.fetchone()[0] is not None
     if has_live_table:
         cur.execute(
             sql.SQL("ALTER TABLE {} RENAME TO {}") .format(
-                sql.Identifier("chunks"), sql.Identifier(PREVIOUS_TABLE)
+                sql.Identifier(tables.live), sql.Identifier(tables.previous)
             )
         )
     cur.execute(
         sql.SQL("ALTER TABLE {} RENAME TO {}") .format(
-            sql.Identifier(STAGING_TABLE), sql.Identifier("chunks")
+            sql.Identifier(tables.staging), sql.Identifier(tables.live)
         )
     )
     if has_live_table:
-        cur.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(PREVIOUS_TABLE)))
+        cur.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(tables.previous)))
     cur.execute("ALTER INDEX chunks_next_embedding_idx RENAME TO chunks_embedding_idx")
     cur.execute("ALTER INDEX chunks_next_text_search_idx RENAME TO chunks_text_search_idx")
 

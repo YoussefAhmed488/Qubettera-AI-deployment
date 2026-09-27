@@ -32,6 +32,38 @@ def _make_conninfo() -> str:
     )
 
 
+def _supabase_conninfo() -> str:
+    """Build a connection string for the Supabase target.
+
+    Reuses the shared connection helper so the URI is resolved exactly as the
+    RAG side resolves it, then pins the search_path: LangGraph's own setup
+    statements are unqualified and Supabase keeps pgvector in `extensions`.
+    """
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo  # type: ignore[import]
+
+    from qubettera.rag.database import get_db_config
+
+    settings = get_db_config(purpose="Postgres checkpoints")
+    fields = conninfo_to_dict(settings["dsn"])
+    fields.setdefault("connect_timeout", "10")
+    fields["sslmode"] = settings.get("sslmode", "require")
+    fields["options"] = settings.get("options", "")
+    return make_conninfo(**fields)
+
+
+def _target_conninfo() -> str | None:
+    """Return an explicit conninfo for a non-default target, else ``None``.
+
+    ``None`` preserves the local behaviour, including its existing
+    ``PGHOST``-based error message, so callers fall back to ``_make_conninfo()``.
+    """
+    from qubettera.rag.database import active_target
+
+    if active_target() == "local":
+        return None
+    return _supabase_conninfo()
+
+
 @contextmanager
 def open_postgres_checkpointer(conninfo: str | None = None) -> Iterator:
     """Open and initialise a durable LangGraph PostgresSaver.
@@ -43,7 +75,8 @@ def open_postgres_checkpointer(conninfo: str | None = None) -> Iterator:
     os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
     from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore[import]
 
-    with PostgresSaver.from_conn_string(conninfo or _make_conninfo()) as saver:
+    resolved = conninfo or _target_conninfo()
+    with PostgresSaver.from_conn_string(resolved or _make_conninfo()) as saver:
         saver.setup()
         yield saver
 
@@ -60,9 +93,12 @@ def get_checkpointer() -> Iterator:
     if backend not in {"memory", "postgres"}:
         raise ValueError("CHECKPOINT_BACKEND must be memory or postgres.")
     if backend == "postgres":
-        missing = [name for name in _REQUIRED_PG_VARS if not os.environ.get(name)]
-        if missing:
-            raise ValueError("PostgreSQL checkpoints require: " + ", ".join(missing))
+        # Supabase resolves its connection from a URI, so the PG* variables are
+        # only required for the local target (whose error message is asserted).
+        if _target_conninfo() is None:
+            missing = [name for name in _REQUIRED_PG_VARS if not os.environ.get(name)]
+            if missing:
+                raise ValueError("PostgreSQL checkpoints require: " + ", ".join(missing))
         with open_postgres_checkpointer() as saver:
             yield saver
     else:

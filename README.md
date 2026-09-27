@@ -105,6 +105,9 @@ qubettera rag retrieve "mixture of experts routing" --adaptive-expand
 qubettera rag evaluate
 qubettera rag evaluate --mode hybrid
 qubettera rag evaluate --mode adaptive
+qubettera rag supabase-init --url "postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+qubettera rag migrate
+qubettera rag migrate --stage-only
 qubettera agent opinion dr_aris "Dense versus sparse transformer layers"
 qubettera discuss run --mode fake
 qubettera discuss run --mode live
@@ -189,6 +192,16 @@ connection open for the runtime and closes it on success or failure. Library
 callers should use `with Week2AgentRuntime(...) as runtime:` or call `close()`.
 PostgreSQL preserves agent threads; resuming an interrupted whole discussion
 from the CLI is not supported. `qubettera agent opinion` remains available.
+
+The retrieval corpus runs in the bundled Postgres container by default. Set
+`QUBETTERA_DB=supabase` to use a hosted Supabase project instead; both targets
+share one schema and one set of queries. `qubettera rag supabase-init` saves the
+connection URI, and `qubettera rag migrate` copies the local corpus across in a
+staged, atomically published swap. On the Supabase target the checkpoint
+connection resolves from the same URI, so the `PG*` variables above are only
+needed for the local target. See
+[Supabase documentation](docs/rag/supabase.md) for project setup, the
+session-pooler requirement, and the migration and rollback procedure.
 
 Live CLI runs use one model worker per round for Kaggle and local Ollama,
 and five for W&B Inference. Use `--max-workers N` to adjust concurrency.

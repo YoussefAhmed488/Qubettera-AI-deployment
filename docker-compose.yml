@@ -24,6 +24,9 @@ services:
     environment:
       PGHOST: postgres
       PGPORT: 5432
+      # To run the backend against Supabase instead, set QUBETTERA_DB=supabase
+      # and SUPABASE_DB_URL in .env. Those take precedence over the local
+      # PGHOST/PGPORT below, which stay for the bundled postgres service.
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
