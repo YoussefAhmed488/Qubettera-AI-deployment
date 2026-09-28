@@ -163,7 +163,7 @@ class SentimentScorer:
     def __init__(
         self,
         model_name: str = _DEFAULT_MODEL,
-        device: int = -1,
+        device: int = 0,
         batch_size: int = _DEFAULT_BATCH_SIZE,
         max_length: int = _DEFAULT_MAX_LENGTH,
     ) -> None:
