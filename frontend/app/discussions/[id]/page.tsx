@@ -40,6 +40,13 @@ export default function DiscussionPage({ params }: PageProps) {
     (state.discussionId === id && state.status !== "idle") ||
     (state.status === "streaming" && state.discussionId === null);
 
+  // The replay fetch short-circuits while `isLive` is true, so `replay` stays
+  // null and `replayLoading` would remain true forever. Scope the replay
+  // loading/error gates to non-live mode, otherwise a live stream renders as
+  // "Loading transcript…" for the whole discussion.
+  const showReplayLoading = !isLive && replayLoading;
+  const showReplayError = !isLive && !replayLoading && replayError !== undefined;
+
   // ── Replay (no live SSE context) ─────────────────────────────────────────
   // Poll active transcripts until the backend reports a terminal state.
   // Slow model turns can take minutes without producing a new message.
@@ -213,13 +220,13 @@ export default function DiscussionPage({ params }: PageProps) {
       <div className="flex flex-1 overflow-hidden">
         {/* Chat column */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {replayLoading ? (
+          {showReplayLoading ? (
             <div className="flex flex-1 items-center justify-center text-sm text-slate-400">
               Loading transcript…
             </div>
-          ) : replayError && !isLive ? (
+          ) : showReplayError ? (
             <div className="p-6">
-              <InlineError message={replayError} />
+              <InlineError message={replayError!} />
             </div>
           ) : (
             <ChatView
