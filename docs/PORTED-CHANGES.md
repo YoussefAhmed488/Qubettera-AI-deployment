@@ -6,8 +6,8 @@
 |------|--------|
 | `src/qubettera/discussion/orchestrator.py` | **Updated** — thread-safe event writes + DiscussionExecutionError merge |
 | `src/qubettera/discussion/demo.py` | **Updated** — ConsoleTurnStream, --parallel, --no-agent-tools, persona names, timestamped output |
-| `src/qubettera/discussion/retrieval_provider.py` | **No changes needed** — Qubettera-AI uses local MiniLM, not Kaggle Ollama |
-| `src/qubettera/rag/retrieve.py` | **No changes needed** — Qubettera-AI uses local SentenceTransformer embeddings |
+| `src/qubettera/discussion/retrieval_provider.py` | **No changes needed** — Qubettera-AI uses Modal-hosted Qwen3 embeddings, not Kaggle Ollama |
+| `src/qubettera/rag/retrieve.py` | **No changes needed** — Qubettera-AI uses Modal-hosted Qwen3 embeddings via the shared provider adapter |
 | `tests/discussion/test_demo.py` | **Created** — fake mode streaming tests |
 
 ---
@@ -48,13 +48,13 @@
 ### 3. `src/qubettera/discussion/retrieval_provider.py`
 
 **No changes needed.** Qubettera-AI's version already uses:
-- Local `MiniLM` / `SentenceTransformer` embeddings (not Kaggle Ollama)
+- Modal-hosted `Qwen/Qwen3-Embedding-0.6B` embeddings (not Kaggle Ollama)
 - `RetrievalService` wrapper around PostgreSQL pgvector
 - Graceful degradation on errors (returns `()` instead of crashing)
 - `_clip()` component truncation for query building
 - `retrieval_focus` from persona loader
 
-The Kaggle Ollama semaphore + retry logic from the Transformer-Architecture-Debate-Framework is **not applicable** because Qubettera-AI runs embeddings locally.
+The Kaggle Ollama semaphore + retry logic from the Transformer-Architecture-Debate-Framework is **not applicable** because Qubettera-AI calls a plain HTTPS embedding endpoint. The hosted service has no connection pool to gate.
 
 ### 4. `tests/discussion/test_demo.py` (**New file**)
 
@@ -92,13 +92,17 @@ outputs/discussions/demo-fake-json-5agents-<timestamp>.jsonl
 
 ---
 
-## Architecture Note: Kaggle vs Local Embeddings
+## Architecture Note: Kaggle vs Hosted Embeddings
 
 | Aspect | Transformer-Architecture-Debate-Framework | Qubettera-AI |
 |--------|-------------------------------------------|--------------|
-| Embedding model | `qwen3-embedding:8b` on Kaggle Ollama (remote GPU) | `MiniLM` via `SentenceTransformer` (local CPU/GPU) |
-| Connection | ngrok tunnel → Kaggle notebook | Direct PostgreSQL connection |
-| Concurrency guard | `Semaphore(2)` + retry + backoff | Not needed (local embedding is fast) |
-| Failure mode | Returns `()` if Kaggle is unreachable | Returns `()` on DB errors |
+| Embedding model | `qwen3-embedding:8b` on Kaggle Ollama (remote GPU) | `Qwen/Qwen3-Embedding-0.6B` on Modal (remote CPU/GPU) |
+| Connection | ngrok tunnel → Kaggle notebook | HTTPS endpoint → Modal; PostgreSQL remains the vector store |
+| Concurrency guard | `Semaphore(2)` + retry + backoff | Not needed (stateless HTTP call, no local model to serialize) |
+| Failure mode | Returns `()` if Kaggle is unreachable | Raises `ModalServiceError`, surfaced as a retrieval error |
 
-This means **Qubettera-AI does not have the Kaggle retrieval failures** that the other project experiences. Retrieval is always available as long as PostgreSQL is reachable.
+The embedding model is remote in both projects, but for different reasons: the other
+project uses a self-hosted Ollama tunnel, whereas Qubettera-AI calls a deployed
+Modal service. Retrieval is available as long as both Modal and PostgreSQL are
+reachable; `EMBEDDING_PROVIDER=local` restores a fully local path that only needs
+PostgreSQL.

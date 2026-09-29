@@ -48,6 +48,31 @@ ADAPTIVE_EXPANSION_MIN_SIMILARITY = _bounded_float_env(
     "ADAPTIVE_EXPANSION_MIN_SIMILARITY", 0.55, -1.0, 1.0
 )
 
+# Retrieval embeddings are served by the Modal-hosted Qwen3-Embedding service by
+# default; both the document and query paths honour this switch. Set
+# EMBEDDING_PROVIDER=local to run the model in-process instead (the Docker image
+# caches the weights, and an existing embedding cache stays valid either way
+# because the hosted model reproduces the local vectors).
+_EMBEDDING_PROVIDERS = {"cloud", "local"}
+EMBEDDING_PROVIDER_DEFAULT = "cloud"
+
+
+def get_embedding_provider() -> str:
+    """Return the active embedding provider ('cloud' or 'local').
+
+    Read per call rather than captured at import so a process (or a test) can
+    switch providers without reloading this module.
+    """
+    provider = os.environ.get(
+        "EMBEDDING_PROVIDER", EMBEDDING_PROVIDER_DEFAULT
+    ).strip().lower()
+    if provider not in _EMBEDDING_PROVIDERS:
+        raise RuntimeError(
+            f"EMBEDDING_PROVIDER must be one of {sorted(_EMBEDDING_PROVIDERS)}, "
+            f"got {provider!r}"
+        )
+    return provider
+
 
 def get_embedding_device() -> str:
     """Select CUDA when available while retaining a usable CPU fallback."""

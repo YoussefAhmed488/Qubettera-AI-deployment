@@ -37,6 +37,7 @@ from qubettera.rag.settings import (
     EMBEDDING_MODEL_REVISION,
     PIPELINE_VERSION,
     PREPROCESSING_VERSION,
+    get_embedding_provider,
 )
 from qubettera.rag.contextual_text import build_contextual_text
 from qubettera.rag.jsonl import (
@@ -162,7 +163,17 @@ def encode_batch(model, texts: list[str]):
 
 
 def load_embedding_model():
-    """Prefer an existing Hugging Face cache and download only when absent."""
+    """Load the configured embedding provider.
+
+    The hosted model is the default and needs no local weights. With
+    ``EMBEDDING_PROVIDER=local`` an existing Hugging Face cache is preferred and
+    the model is downloaded only when absent.
+    """
+    if get_embedding_provider() == "cloud":
+        from qubettera.rag.cloud_embedding import CloudEmbeddingModel
+
+        return CloudEmbeddingModel(EXPECTED_DIM)
+
     from sentence_transformers import SentenceTransformer
 
     try:
@@ -213,7 +224,10 @@ def run():
         print("All current chunks are embedded; compacted the embedding cache.")
         return
 
-    print(f"Loading embedding model: {MODEL_NAME} (first run downloads ~1.2GB)")
+    if get_embedding_provider() == "cloud":
+        print(f"Loading embedding model: {MODEL_NAME} (served by Modal)")
+    else:
+        print(f"Loading embedding model: {MODEL_NAME} (first run downloads ~1.2GB)")
     model = load_embedding_model()
     get_dimension = getattr(model, "get_embedding_dimension", None)
     actual_dim = (

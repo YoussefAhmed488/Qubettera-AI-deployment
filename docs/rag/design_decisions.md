@@ -42,6 +42,8 @@ Chunks carry URL/title provenance, heading metadata, document/chunk indexes, col
 
 The default model is `Qwen/Qwen3-Embedding-0.6B` with 1024 dimensions. Query embeddings use the model's built-in `query` retrieval prompt while document embeddings remain unprompted. Model name, requested revision, dimensionality, pipeline version, and preprocessing version are configured centrally in `qubettera.rag.settings`.
 
+The model runs on the Modal-hosted endpoint by default (`EMBEDDING_PROVIDER=cloud`), which authenticates with `X-API-Key`; `EMBEDDING_PROVIDER=local` runs the same model in-process instead. Both paths share one adapter interface (`encode()` plus the model's prompt table), so query prompting, dimension checks, and the cache identity below are provider-independent. The hosted model reproduces the local vectors closely enough that an existing embedding cache — including the corpus already stored in Supabase — stays valid across a provider switch and is never rebuilt for one.
+
 The embedding artifact is resumable, but a cache row is reusable only when all of these agree:
 
 - Content hash
