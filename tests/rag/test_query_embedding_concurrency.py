@@ -10,16 +10,6 @@ import pytest
 retrieve = importlib.import_module("qubettera.rag.retrieve")
 
 
-@pytest.fixture(autouse=True)
-def local_embedding_provider(monkeypatch):
-    """These tests cover in-process weight loading, so pin the local provider.
-
-    ``EMBEDDING_PROVIDER`` defaults to ``cloud``, which returns a stateless HTTP
-    client and would bypass the SentenceTransformer construction under test.
-    """
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
-
-
 def test_parallel_queries_load_weights_once_and_serialize_encoding(monkeypatch):
     barrier = threading.Barrier(5)
     calls = []

@@ -21,7 +21,6 @@ if __package__ in {None, ""}:
         EMBEDDING_DIM,
         EMBEDDING_MODEL,
         EMBEDDING_MODEL_REVISION,
-        get_embedding_provider,
         IVFFLAT_PROBES as CONFIGURED_IVFFLAT_PROBES,
         PIPELINE_VERSION,
         PREPROCESSING_VERSION,
@@ -34,7 +33,6 @@ else:
         EMBEDDING_DIM,
         EMBEDDING_MODEL,
         EMBEDDING_MODEL_REVISION,
-        get_embedding_provider,
         IVFFLAT_PROBES as CONFIGURED_IVFFLAT_PROBES,
         PIPELINE_VERSION,
         PREPROCESSING_VERSION,
@@ -72,12 +70,6 @@ def _get_embed_model():
     # weights; publish the model only after construction completes successfully.
     with _embed_model_lock:
         if _embed_model is None:
-            if get_embedding_provider() == "cloud":
-                # Stateless HTTP client: no weights to load or serialize.
-                from qubettera.rag.cloud_embedding import CloudEmbeddingModel
-
-                _embed_model = CloudEmbeddingModel(EMBEDDING_DIM)
-                return _embed_model
             from sentence_transformers import SentenceTransformer
             try:
                 _embed_model = SentenceTransformer(
@@ -220,9 +212,6 @@ def get_index_manifest() -> dict:
             with conn.cursor() as cur:
                 manifest = _read_index_manifest(cur, include_urls=True)
     except psycopg2.Error as exc:
-        # The HTTP layer replaces this message with a generic 502, so without a
-        # server-side log the cause (wrong target, missing table, timeout) is lost.
-        logger.error("Index metadata query failed: %s", exc)
         raise RuntimeError("Database query failed while reading index metadata.") from exc
     _validate_index_identity(manifest)
     return manifest
@@ -502,7 +491,6 @@ def _retrieve_once(
                         )
                     )
     except psycopg2.Error as exc:
-        logger.error("Retrieval query failed: %s", exc)
         raise RuntimeError("Database query failed during retrieval.") from exc
 
     fused = _weighted_rrf_fuse(ranked_lists)

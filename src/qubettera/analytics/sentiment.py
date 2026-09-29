@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from qubettera.modal_client import classify_texts, sentiment_provider
-
 from .loader import DiscussionLog
 
 
@@ -136,14 +134,12 @@ def _clamp(value: float, low: float = _MIN_SENTIMENT, high: float = _MAX_SENTIME
 # ---------------------------------------------------------------------------
 
 class SentimentScorer:
-    """Sentiment scorer with a hosted (Modal) and a local backend.
+    """Local transformer-based sentiment scorer.
 
-    The default backend is the Modal-hosted ``aieng-lab/ModernBERT-large_sentiment``
-    service, which needs no local weights. Set ``SENTIMENT_PROVIDER=local`` to run
-    the model in-process instead, via a transformer pipeline that is loaded lazily
-    on first use so that simply importing this class (or the parent package) does
-    not require ``transformers`` / ``torch`` to be installed. Construction is cheap
-    either way; the expensive model load happens inside ``_load()``.
+    The transformer pipeline is loaded lazily on first use so that simply
+    importing this class (or the parent package) does not require
+    ``transformers`` / ``torch`` to be installed. Construction is cheap;
+    the expensive model load happens inside ``_load()``.
 
     Parameters
     ----------
@@ -206,8 +202,7 @@ class SentimentScorer:
             each must be the same length as ``texts``.
         """
         self._load()
-        if self.provider == "local":
-            assert self._pipeline is not None, "pipeline failed to load"
+        assert self._pipeline is not None, "pipeline failed to load"
 
         n = len(texts)
         # Fill in missing metadata with neutral defaults so the parallel
@@ -246,7 +241,16 @@ class SentimentScorer:
 
         # Run batched inference on the valid subset.
         if valid_texts:
-            raw_outputs, token_counts = self._infer(valid_texts)
+            raw_outputs = self._pipeline(
+                valid_texts,
+                batch_size=self.batch_size,
+                truncation=True,
+                max_length=self.max_length,
+            )
+            # Count tokens on the full (untruncated) texts so we can flag
+            # which messages exceeded max_length. This is a single batched
+            # tokenizer call, negligible next to model inference.
+            token_counts = self._count_tokens_batch(valid_texts)
             for local_idx, raw in enumerate(raw_outputs):
                 original_idx = valid_indices[local_idx]
                 results[original_idx] = self._build_result(
@@ -281,45 +285,15 @@ class SentimentScorer:
 
     # -- Internal -----------------------------------------------------------
 
-    @property
-    def provider(self) -> str:
-        """The active backend, read per call so env changes take effect live."""
-        return sentiment_provider()
-
-    def _infer(self, texts: list[str]) -> tuple[list[list[dict[str, Any]]], list[int]]:
-        """Score ``texts``, returning raw label/score lists and token counts.
-
-        Both backends return one raw label/score list per text plus the
-        untruncated token count, so ``_build_result`` is provider-agnostic.
-        """
-        if self.provider == "cloud":
-            scored = classify_texts(texts, max_length=self.max_length)
-            return (
-                [item["predictions"] for item in scored],
-                [item["token_count"] for item in scored],
-            )
-
-        raw_outputs = self._pipeline(
-            texts,
-            batch_size=self.batch_size,
-            truncation=True,
-            max_length=self.max_length,
-        )
-        # Count tokens on the full (untruncated) texts so we can flag
-        # which messages exceeded max_length. This is a single batched
-        # tokenizer call, negligible next to model inference.
-        return raw_outputs, self._count_tokens_batch(texts)
-
     def _load(self) -> None:
-        """Load the local transformer pipeline on first use.
+        """Load the transformer pipeline on first use.
 
         Importing ``transformers`` here rather than at module top means the
         rest of the analytics package can be imported and used without
         ``transformers`` / ``torch`` installed. The import cost is paid
-        only when local sentiment scoring is actually requested; the hosted
-        provider needs no local weights and returns immediately.
+        only when sentiment scoring is actually requested.
         """
-        if self.provider == "cloud" or self._pipeline is not None:
+        if self._pipeline is not None:
             return
         # Local import â€” deliberate, see docstring.
         from transformers import pipeline  # type: ignore[import-untyped]

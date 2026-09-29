@@ -77,8 +77,6 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-# Local scratch notebook for testing the Ollama server.
-/testing-ollama-server.ipynb
 
 # IPython
 profile_default/
@@ -256,8 +254,6 @@ Thumbs.db
 node_modules/
 .next/
 *.tsbuildinfo
-# Bundled frontend asset produced by the local build server.
-/app_bundle.js
 .env.local
 .env.*.local
 !frontend/lib/

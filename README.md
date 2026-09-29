@@ -21,20 +21,11 @@ docker compose up -d
 qubettera doctor
 ```
 
-The template defaults to `LLM_PROVIDER=wandb`; set `WANDB_API_KEY` in `.env` to
-use it. To generate answers from the Kaggle notebook instead, set
-`LLM_PROVIDER=kaggle` plus `KAGGLE_LLM_URL` and `KAGGLE_LLM_MODEL` to match the
-notebook. The unused `LLM_PROVIDER` options are documented at the end of
-`.env.example`.
+Set `KAGGLE_LLM_URL` and `KAGGLE_LLM_MODEL` in `.env` to match the notebook.
 `Qwen/Qwen3-Embedding-0.6B` is used for embeddings and retrieval; the selected
 chat provider generates answers. Retrieval uses vector and PostgreSQL keyword search fused
-with reciprocal-rank fusion. Embeddings are served by the Modal-hosted Qwen3
-endpoint by default (`EMBEDDING_PROVIDER=cloud`), so no local weights are
-needed; set `EMBEDDING_PROVIDER=local` to run the model in-process instead.
-The corpus already stored in Supabase was built with the same model and remains
-valid — it is never rebuilt for a provider switch, because the hosted model
-reproduces the stored vectors (cosine similarity ≈ 1.0). If local embedding runs
-out of memory, lower `EMBEDDING_BATCH_SIZE` from its default of `8`.
+with reciprocal-rank fusion. If embedding runs out of memory, lower
+`EMBEDDING_BATCH_SIZE` from its default of `8`.
 
 Query expansion can use a separate local Ollama model. Set
 `QUERY_EXPANSION_PROVIDER=ollama`, `QUERY_EXPANSION_MODEL=qwen3:4b`, and
@@ -146,12 +137,10 @@ Generated corpus files live in `data/`; opinions and discussions live in
 `docs/`.
 
 Analytics reads a completed live discussion log and writes a JSON summary,
-Markdown report, and PNG charts to `outputs/analytics/`. Stance scoring uses the
-configured LLM provider. Sentiment is scored by the Modal-hosted
-`aieng-lab/ModernBERT-large_sentiment` service by default, so the optional
-`[analytics]` extras and a local model download are only needed when you set
-`SENTIMENT_PROVIDER=local` to run the transformer in-process. See
-[analytics documentation](docs/analytics/README.md)
+Markdown report, and PNG charts to `outputs/analytics/`. Install the optional
+dependencies with `python -m pip install -e ".[analytics]"` first. Stance
+scoring uses the configured LLM provider, and sentiment scoring downloads a
+local transformer model on first use. See [analytics documentation](docs/analytics/README.md)
 for exact commands, metric definitions, and limits. Fake discussion logs contain
 placeholder opinions and are rejected by the analytics loader.
 
